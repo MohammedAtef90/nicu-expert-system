@@ -2,19 +2,19 @@ import io
 import re
 from typing import Any, Dict, List
 
+import streamlit as st
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 
+# ==========================================
+# 1. CLINICAL LOGIC ENGINE
+# ==========================================
 
 class NicuExpertSystem:
-    """IAFH NICU Local Clinical Expert System.
+    """IAFH NICU Local Clinical Expert System."""
 
-    Works completely offline.
-    """
-
-    # القوائم والخيارات القياسية للواجهة والنظام
     CLINICAL_OPTIONS = {
         "acuity_levels": ["Stable", "Moderate", "Critical", "Extreme Critical"],
         "respiratory_support": [
@@ -86,7 +86,7 @@ class NicuExpertSystem:
         milk_amount_ml: str,
     ) -> Dict[str, Any]:
 
-        weight_kg = current_weight_grams / 1000
+        weight_kg = current_weight_grams / 1000 if current_weight_grams else 0
         ivf_dextrose = 10.0
 
         if ivf_details:
@@ -114,7 +114,7 @@ class NicuExpertSystem:
             if q_match:
                 volume = float(q_match.group(1))
                 every = float(q_match.group(3))
-                milk_rate_ml_hr = volume / every
+                milk_rate_ml_hr = volume / every if every > 0 else 0
             else:
                 hourly = re.search(
                     r"(\d+(\.\d+)?)\s*mL/h", milk_amount_ml, re.IGNORECASE
@@ -149,6 +149,7 @@ class NicuExpertSystem:
             "parenteralGir": parenteral_gir,
             "enteralGir": enteral_gir,
             "totalGir": total_gir,
+            "status": status,
             "aiInsights": insights,
         }
 
@@ -211,13 +212,13 @@ class NicuExpertSystem:
             critique_items.append("Urgent assessment required.")
 
         situation_html = f"""
-        <h2 style="color:#00c897;">SITUATION</h2>
+        <h3 style="color:#00c897; margin-bottom: 4px;">SITUATION</h3>
         <p>Patient <b>{name}</b> | GA <b>{ga_w}w {ga_d}d</b> | Room <b>{patient.get('room','N/A')}</b> | Acuity: <b>{acuity}</b><br>
         Recent Events: {recent_events or 'None reported'}</p>
         """
 
         background_html = f"""
-        <h2 style="color:#4da6ff;">BACKGROUND</h2>
+        <h3 style="color:#4da6ff; margin-bottom: 4px;">BACKGROUND</h3>
         <p>
             DOL: {dol}<br>
             Diagnosis: {diagnoses_str}<br>
@@ -227,7 +228,7 @@ class NicuExpertSystem:
         """
 
         assessment_html = f"""
-        <h2 style="color:#ffd633;">ASSESSMENT</h2>
+        <h3 style="color:#ffd633; margin-bottom: 4px;">ASSESSMENT</h3>
         <ul>
             <li>Respiratory Support: {resp.get('supportType', 'Room Air')} ({resp.get('details', 'N/A')})</li>
             <li>Feeding & Milk: {fluids.get('milkDetails', 'N/A')} - {fluids.get('milkAmountMl', 'N/A')}</li>
@@ -238,7 +239,7 @@ class NicuExpertSystem:
         """
 
         recommendation_html = f"""
-        <h2 style="color:#00d26a;">RECOMMENDATION</h2>
+        <h3 style="color:#00d26a; margin-bottom: 4px;">RECOMMENDATION</h3>
         <ul>
             <li>Advance enteral feeding as tolerated.</li>
             <li>{"Start serial head circumference monitoring." if "occipital" in recent_events.lower() else "Continue strict intake/output monitoring."}</li>
@@ -459,12 +460,178 @@ class NicuExpertSystem:
         return pdf_data
 
 
-if __name__ == "__main__":
-    result = NicuExpertSystem.calculate_gir(
-        current_weight_grams=1200,
-        ivf_rate_ml_hr=4,
-        ivf_details="D10W",
-        tpn_type="None",
-        milk_amount_ml="6 mL q3h",
+# ==========================================
+# 2. STREAMLIT USER INTERFACE
+# ==========================================
+
+def main():
+    st.set_page_config(
+        page_title="NICU Expert System",
+        page_icon="👶",
+        layout="wide"
     )
-    print("GIR Test Result:", result)
+
+    st.title("👶 IAFH NICU Clinical Expert System")
+    st.caption("Offline Clinical Decision Support & SBAR Handoff Tool")
+
+    tabs = st.tabs(["📊 GIR Calculator", "📋 SBAR Handoff", "📑 Discharge Summary"])
+
+    # ----------------------------------------
+    # TAB 1: GIR CALCULATOR
+    # ----------------------------------------
+    with tabs[0]:
+        st.header("Glucose Infusion Rate (GIR) Calculator")
+        
+        col1, col2 = st.columns(2)
+
+        with col1:
+            weight_g = st.number_input("Current Weight (grams)", min_value=100.0, max_value=8000.0, value=1200.0, step=50.0)
+            ivf_rate = st.number_input("IVF Rate (mL/hr)", min_value=0.0, max_value=50.0, value=4.0, step=0.1)
+            ivf_details = st.selectbox("IVF Fluid Type", ["D10W", "D5W", "D7.5W", "D12.5W", "D15W"], index=0)
+
+        with col2:
+            tpn_type = st.selectbox("TPN Type", ["None", "Starter TPN", "Custom TPN"], index=0)
+            milk_amount = st.text_input("Enteral Milk Amount (e.g., '6 mL q3h' or '2 mL/h')", value="6 mL q3h")
+
+        if st.button("Calculate GIR", type="primary"):
+            res = NicuExpertSystem.calculate_gir(
+                current_weight_grams=weight_g,
+                ivf_rate_ml_hr=ivf_rate,
+                ivf_details=ivf_details,
+                tpn_type=tpn_type,
+                milk_amount_ml=milk_amount
+            )
+
+            st.divider()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Weight (kg)", f"{res['weightKg']:.2f}")
+            m2.metric("Parenteral GIR", f"{res['parenteralGir']:.1f} mg/kg/min")
+            m3.metric("Enteral GIR", f"{res['enteralGir']:.1f} mg/kg/min")
+            m4.metric("Total GIR", f"{res['totalGir']:.1f} mg/kg/min")
+
+            if res['status'] == "Within Target":
+                st.success(f"Status: **{res['status']}** (Normal target: 4-8 mg/kg/min)")
+            else:
+                st.warning(f"Status: **{res['status']}** (Normal target: 4-8 mg/kg/min)")
+
+            st.markdown(res['aiInsights'], unsafe_allow_html=True)
+
+    # ----------------------------------------
+    # TAB 2: SBAR HANDOFF
+    # ----------------------------------------
+    with tabs[1]:
+        st.header("SBAR Handoff Generator")
+
+        with st.form("sbar_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                p_name = st.text_input("Patient Name / ID", value="Baby John")
+                mrn = st.text_input("MRN", value="123456")
+                room = st.text_input("Room/Bed", value="NICU Bed 04")
+            with c2:
+                ga_w = st.number_input("Gestational Age (Weeks)", min_value=22, max_value=42, value=30)
+                ga_d = st.number_input("Gestational Age (Days)", min_value=0, max_value=6, value=2)
+                dol = st.number_input("Day of Life (DOL)", min_value=1, max_value=300, value=15)
+            with c3:
+                birth_wt = st.number_input("Birth Weight (g)", value=1200)
+                curr_wt = st.number_input("Current Weight (g)", value=1250)
+                acuity = st.selectbox("Acuity Level", NicuExpertSystem.CLINICAL_OPTIONS["acuity_levels"])
+
+            st.subheader("Clinical Status")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                diagnoses = st.multiselect("Diagnoses", NicuExpertSystem.CLINICAL_OPTIONS["common_diagnoses"], default=["Prematurity", "Respiratory Distress Syndrome (RDS)"])
+                resp_supp = st.selectbox("Respiratory Support", NicuExpertSystem.CLINICAL_OPTIONS["respiratory_support"], index=3)
+                resp_details = st.text_input("Respiratory Settings", value="CPAP 5 cmH2O, FiO2 21%")
+                lines = st.multiselect("Active Lines", NicuExpertSystem.CLINICAL_OPTIONS["line_types"], default=["Peripheral IV (PIV)"])
+            
+            with col_b:
+                feed_type = st.selectbox("Feeding Type", NicuExpertSystem.CLINICAL_OPTIONS["feeding_types"], index=0)
+                milk_details = st.text_input("Milk / Feeding Details", value="6 mL q3h")
+                meds = st.text_area("Medications", value="Caffeine Citrate 5mg IV daily")
+                labs = st.text_area("Recent Labs/Imaging", value="CBC normal, Bilirubin 6.5 mg/dL")
+
+            recent_events = st.text_area("Recent Events / Concerns", value="Occipital scalp swelling noted today.")
+
+            submit_sbar = st.form_submit_button("Generate SBAR Handoff", type="primary")
+
+        if submit_sbar:
+            patient_data = {
+                "name": p_name,
+                "mrn": mrn,
+                "room": room,
+                "gestationalAgeWeeks": ga_w,
+                "gestationalAgeDays": ga_d,
+                "dayOfLife": dol,
+                "birthWeight": birth_wt,
+                "currentWeight": curr_wt,
+                "acuityLevel": acuity,
+                "diagnoses": diagnoses,
+                "recentEvents": recent_events,
+                "respiratory": {"supportType": resp_supp, "details": resp_details},
+                "fluidsNutrition": {"milkDetails": feed_type, "milkAmountMl": milk_details},
+                "lines": lines,
+                "medications": meds,
+                "labs": labs,
+            }
+
+            sbar_res = NicuExpertSystem.generate_sbar_handoff(patient_data)
+
+            # Display Alerts
+            if sbar_res["safetyAlerts"]:
+                st.error("🚨 **SAFETY ALERTS**")
+                for alert in sbar_res["safetyAlerts"]:
+                    st.write(f"- {alert}")
+
+            # Display Verbal Script
+            st.markdown(sbar_res["verbalScript"], unsafe_allow_html=True)
+
+            if sbar_res["aiCritiqueAndRecommendations"]:
+                st.markdown(sbar_res["aiCritiqueAndRecommendations"], unsafe_allow_html=True)
+
+            # PDF Download
+            pdf_bytes = NicuExpertSystem.generate_pdf_report(patient_data, sbar_res)
+            st.download_button(
+                label="📥 Download SBAR PDF Report",
+                data=pdf_bytes,
+                file_name=f"SBAR_{p_name.replace(' ', '_')}.pdf",
+                mime="application/pdf"
+            )
+
+    # ----------------------------------------
+    # TAB 3: DISCHARGE SUMMARY
+    # ----------------------------------------
+    with tabs[2]:
+        st.header("Discharge Summary Generator")
+        
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            d_mrn = st.text_input("Patient MRN", value="123456", key="d_mrn")
+            d_ga_w = st.number_input("GA Weeks", value=32, key="d_gaw")
+            d_ga_d = st.number_input("GA Days", value=0, key="d_gad")
+            d_birth = st.number_input("Birth Weight (g)", value=1400, key="d_bw")
+        
+        with col_d2:
+            d_curr = st.number_input("Discharge Weight (g)", value=1850, key="d_cw")
+            d_diags = st.multiselect("Final Diagnoses", NicuExpertSystem.CLINICAL_OPTIONS["common_diagnoses"], default=["Prematurity"], key="d_diag")
+            d_resp = st.selectbox("Discharge Respiratory Status", NicuExpertSystem.CLINICAL_OPTIONS["respiratory_support"], index=0, key="d_resp")
+            d_outcome = st.selectbox("Discharge Outcome", NicuExpertSystem.CLINICAL_OPTIONS["discharge_outcomes"], index=0)
+
+        if st.button("Generate Summary"):
+            p_summary_data = {
+                "mrn": d_mrn,
+                "gestationalAgeWeeks": d_ga_w,
+                "gestationalAgeDays": d_ga_d,
+                "birthWeight": d_birth,
+                "currentWeight": d_curr,
+                "diagnoses": d_diags,
+                "respiratory": {"supportType": d_resp}
+            }
+            summary_text = NicuExpertSystem.generate_discharge_summary(p_summary_data, d_outcome)
+            
+            st.subheader("Generated Discharge Text")
+            st.info(summary_text)
+
+
+if __name__ == "__main__":
+    main()
